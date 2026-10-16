@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+*.pyc
+.fdgx/
+.fdgx-home/
+.pytest_cache/

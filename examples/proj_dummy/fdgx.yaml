@@ -1,0 +1,67 @@
+# Project file for the dummy project, included from the main fdgx.yaml.
+# Relative paths are resolved against this file's directory, which is also the default workdir.
+#
+# Templates: commands, names, needs, env values and checks are Python format strings.
+#   {item} {item.stem} {item.name} {item.parent} {item.index}   the work item ({item.key} for dict items)
+#   {gpus} "0,3"   {num_gpus} 2   {attempt} {oom_level} {phase} {task} {project} {workdir}
+#   plus every key of `vars` (after on_oom overrides).   Literal braces: {{ and }}.
+# Children also get CUDA_VISIBLE_DEVICES (empty outside `run`), CUDA_DEVICE_ORDER=PCI_BUS_ID,
+# PYTHONUNBUFFERED=1 and FDGX_TASK / FDGX_PHASE / FDGX_ATTEMPT / FDGX_OOM_LEVEL / FDGX_GPUS / FDGX_NUM_GPUS.
+
+projects:
+  dummy:
+    # workdir: .               # default: this file's directory
+    # log_dir: logs            # job logs next to the project (default: <state_dir>/logs/<project>)
+    env_manager: uv            # `uv sync` once at start; every command runs via `uv run --no-sync`
+    # uv: { python: "3.11", extras: [cuda], groups: [train] }
+    # env_manager: shell       # alternative, e.g. conda:
+    # shell_prefix: "source ~/miniconda3/bin/activate myenv &&"
+    env:
+      HF_HOME: "{workdir}/.hf"
+    # Project setup: once per scheduler start, before any task of the project (CPU only).
+    setup:
+      skip_if: "test -d work"
+      run: "mkdir -p work results"
+    # Project epilogue: once all tasks are finished (see scheduler.project_epilogue_when), and again
+    # whenever tasks are added later and finish.
+    epilogue:
+      run: "python job.py summary"
+      # when: all_finished
+    retry: { max_attempts: 5, backoff: [30s, 2m] }
+
+    tasks:
+      - name: "train-{item.stem}"
+        items: { glob: "configs/*.yaml" }    # or a list, {range: [0, 5]}, {file: items.txt}, {command: "..."}
+        done_if: "test -f results/{item.stem}.json"
+        priority: 0                          # higher runs first
+        # enabled: false                     # park these tasks (also possible on the whole project)
+        vars: { bs: 32, steps: 20 }
+        resources:
+          vram_gb: 20                        # per GPU
+          gpus: { min: 1, max: 2 }           # take up to 2 if free, start with 1 otherwise
+          cpus: 2                            # CPU budget share; also sets OMP_NUM_THREADS etc.
+        setup:                               # optional per-task setup: CPU, runs ahead of the GPU queue
+          skip_if: "test -f work/{item.stem}.prep"
+          run: "python job.py prepare --item {item}"
+        run:                                 # the only phase that holds GPUs
+          run: "python job.py train --item {item} --bs {bs} --steps {steps} --oom-above 16"
+          stall_timeout: 30m                 # no output for 30 min -> kill and retry (hung NCCL etc.)
+        retry: { max_attempts: 3, backoff: [30s, 2m, 10m], reset_after: 1h }
+        on_oom:                              # applied cumulatively on 1st, 2nd... OOM; doesn't use retries
+          - { bs: 16 }                       # shorthand for { vars: { bs: 16 } }
+          - { vars: { bs: 8 }, resources: { vram_gb: 30 } }
+
+      # Evals need a GPU, so they are tasks of their own that wait for their training run.
+      - name: "eval-ood-{item.stem}"
+        items: { glob: "configs/*.yaml" }
+        needs: ["train-{item.stem}"]         # same project; "other/name" or globs ("train-*") also work
+        done_if: "test -f results/{item.stem}.ood.json"
+        resources: { vram_gb: 5 }
+        run: "python job.py eval --item {item} --suite ood --steps 5"
+
+      - name: "eval-id-{item.stem}"
+        items: { glob: "configs/*.yaml" }
+        needs: ["train-{item.stem}"]
+        done_if: "test -f results/{item.stem}.id.json"
+        resources: { vram_gb: 5 }
+        run: "python job.py eval --item {item} --suite id --steps 5"

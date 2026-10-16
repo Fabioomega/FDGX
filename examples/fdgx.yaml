@@ -1,0 +1,31 @@
+# fdgx main config (machine level). Run with:  ./bootstrap.sh examples/fdgx.yaml
+# Relative paths are resolved against this file's directory.
+# Scheduler settings live only here; projects come from `include:` (and/or an inline `projects:` mapping).
+
+scheduler:
+  gpus: all                    # or a list, e.g. [0, 1, 2, 3]
+  vram_safety_margin_gb: 2     # never plan to use the last N GB of a GPU
+  heartbeat_seconds: 30        # status line interval: keeps the instance from being reaped as idle
+  # keepalive_cmd: "nvidia-smi > /dev/null"   # optional extra "activity" every keepalive_seconds
+  max_cpu_phases: 2            # concurrent setup/epilogue/project-setup processes
+  max_prepared: 2              # tasks allowed to finish setup ahead of getting a GPU
+  # max_running: 4             # cap on concurrent GPU jobs
+  # max_jobs_per_gpu: 3        # or {0: 3, 1: 1}: keep small jobs from crowding a GPU
+  # cpus: 32                   # CPU budget (default: what this container may use)
+  # ram_gb: 400                # RAM budget for tasks that declare resources.ram_gb
+  # max_gpu_util: 90           # skip GPUs (without our jobs) that someone else is using above 90%
+  launch_warmup: 5m            # a new job's whole vram_gb stays reserved this long, then what
+                               # the GPU's used memory doesn't cover yet (whole-run reservation)
+  starvation: 1h               # a task waiting this long stops smaller tasks from jumping ahead
+  rescan_seconds: 300          # reload the config (hot reload), re-list items, pick up `fdgx retry/reset`
+  project_epilogue_when: all_done   # or all_finished: also run when some tasks failed / are blocked
+  state_dir: ../.fdgx          # per-task state + logs; must be on the persistent disk
+  # extra_oom_patterns: ["my custom OOM message"]
+  # gpu_process_log: {path: /path/to/processos.usando.GPU.log, mine: "jupyter-<you>."}  # diagnostics only
+
+include:
+  - proj_dummy/fdgx.yaml       # a project file living in the project's own repo
+  # - proj_dummy/fdgx_pack.py  # the same project generated in Python (enable one of the two: names clash)
+  # - ~/queue/*.yaml           # globs are fine
+  # - { command: "python make_pack.py --big", dir: ~/other-project }
+  # - { command: ".venv/bin/python hpc/fdgx_pack.py", dir: ~/dsa-ml, env_manager: shell }  # venv not run by uv
